@@ -1,0 +1,136 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tapsi-food-map.fullname" . }}
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: application
+spec:
+  {{- if not .Values.app.autoscaling.enabled }}
+  replicas: {{ .Values.app.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "tapsi-food-map.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: application
+  template:
+    metadata:
+      {{- include "tapsi-food-map.podAnnotations" . | nindent 6 }}
+      labels:
+        {{- include "tapsi-food-map.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: application
+    spec:
+      {{- include "tapsi-food-map.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "tapsi-food-map.serviceAccountName" . }}
+      {{- include "tapsi-food-map.securityContext" . | nindent 6 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ include "tapsi-food-map.image" . }}
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.app.service.targetPort }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "tapsi-food-map.fullname" . }}-config
+          env:
+            {{- include "tapsi-food-map.env" . | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.app.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.app.readinessProbe | nindent 12 }}
+          startupProbe:
+            {{- toYaml .Values.app.startupProbe | nindent 12 }}
+          {{- include "tapsi-food-map.resources" . | nindent 10 }}
+          volumeMounts:
+            - name: app-data
+              mountPath: /app/data
+            - name: app-logs
+              mountPath: /app/logs
+      volumes:
+        - name: app-data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "tapsi-food-map.fullname" . }}-data-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: app-logs
+          emptyDir: {}
+      {{- include "tapsi-food-map.nodeSelector" . | nindent 6 }}
+      {{- include "tapsi-food-map.affinity" . | nindent 6 }}
+      {{- include "tapsi-food-map.tolerations" . | nindent 6 }}
+
+{{- if .Values.nginx.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tapsi-food-map.nginx.fullname" . }}
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nginx
+spec:
+  replicas: {{ .Values.nginx.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "tapsi-food-map.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: nginx
+  template:
+    metadata:
+      labels:
+        {{- include "tapsi-food-map.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: nginx
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "80"
+        prometheus.io/path: "/nginx_status"
+    spec:
+      {{- include "tapsi-food-map.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: nginx
+          image: {{ include "tapsi-food-map.nginx.image" . }}
+          imagePullPolicy: {{ .Values.nginx.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+              readOnly: true
+            - name: nginx-logs
+              mountPath: /var/log/nginx
+          resources:
+            {{- toYaml .Values.nginx.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: {{ include "tapsi-food-map.nginx.fullname" . }}-config
+        - name: nginx-logs
+          emptyDir: {}
+      {{- include "tapsi-food-map.nodeSelector" . | nindent 6 }}
+      {{- include "tapsi-food-map.tolerations" . | nindent 6 }}
+{{- end }}

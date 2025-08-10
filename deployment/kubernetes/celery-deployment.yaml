@@ -1,0 +1,210 @@
+# celery-deployment.yaml - Celery worker deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: celery-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: tapsi-food-map
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: celery-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: celery-worker
+        app.kubernetes.io/component: worker
+    spec:
+      containers:
+      - name: celery-worker
+        image: tapsi-food-map:latest
+        command:
+        - celery
+        - -A
+        - celery_app.celery_app
+        - worker
+        - --loglevel=info
+        - --concurrency=4
+        - --prefetch-multiplier=1
+        - --max-tasks-per-child=100
+        envFrom:
+        - configMapRef:
+            name: tapsi-app-config
+        - secretRef:
+            name: tapsi-app-secrets
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@postgres-service:5432/$(DB_NAME)"
+        - name: REDIS_URL
+          value: "redis://$(REDIS_HOST):$(REDIS_PORT)/$(REDIS_DB)"
+        - name: C_FORCE_ROOT
+          value: "1"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: worker-logs
+          mountPath: /app/logs
+        - name: app-data
+          mountPath: /app/data
+      volumes:
+      - name: worker-logs
+        emptyDir: {}
+      - name: app-data
+        persistentVolumeClaim:
+          claimName: app-data-pvc
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-beat
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: celery-beat
+    app.kubernetes.io/component: scheduler
+    app.kubernetes.io/part-of: tapsi-food-map
+spec:
+  replicas: 1  # Only one beat scheduler should run
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: celery-beat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: celery-beat
+        app.kubernetes.io/component: scheduler
+    spec:
+      containers:
+      - name: celery-beat
+        image: tapsi-food-map:latest
+        command:
+        - celery
+        - -A
+        - celery_app.celery_app
+        - beat
+        - --loglevel=info
+        - --schedule=/tmp/celerybeat-schedule
+        - --pidfile=/tmp/celerybeat.pid
+        envFrom:
+        - configMapRef:
+            name: tapsi-app-config
+        - secretRef:
+            name: tapsi-app-secrets
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@postgres-service:5432/$(DB_NAME)"
+        - name: REDIS_URL
+          value: "redis://$(REDIS_HOST):$(REDIS_PORT)/$(REDIS_DB)"
+        - name: C_FORCE_ROOT
+          value: "1"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+        volumeMounts:
+        - name: beat-logs
+          mountPath: /app/logs
+        - name: beat-data
+          mountPath: /tmp
+      volumes:
+      - name: beat-logs
+        emptyDir: {}
+      - name: beat-data
+        emptyDir: {}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-flower
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: celery-flower
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: tapsi-food-map
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: celery-flower
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: celery-flower
+        app.kubernetes.io/component: monitoring
+    spec:
+      containers:
+      - name: celery-flower
+        image: tapsi-food-map:latest
+        command:
+        - celery
+        - -A
+        - celery_app.celery_app
+        - flower
+        - --port=5555
+        - --basic_auth=admin:flower_password
+        ports:
+        - containerPort: 5555
+          name: flower
+        envFrom:
+        - configMapRef:
+            name: tapsi-app-config
+        - secretRef:
+            name: tapsi-app-secrets
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@postgres-service:5432/$(DB_NAME)"
+        - name: REDIS_URL
+          value: "redis://$(REDIS_HOST):$(REDIS_PORT)/$(REDIS_DB)"
+        - name: C_FORCE_ROOT
+          value: "1"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: flower
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: flower
+          initialDelaySeconds: 15
+          periodSeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: celery-flower-service
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: celery-flower
+    app.kubernetes.io/component: monitoring
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5555
+    targetPort: flower
+    protocol: TCP
+    name: flower
+  selector:
+    app.kubernetes.io/name: celery-flower

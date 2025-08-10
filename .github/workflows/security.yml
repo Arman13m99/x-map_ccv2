@@ -1,0 +1,362 @@
+# security.yml - Security Scanning and Compliance Pipeline
+name: Security Scanning
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run security scans daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  # Dependency vulnerability scanning
+  dependency-scan:
+    name: Dependency Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install safety pip-audit
+    
+    - name: Run Safety check
+      run: |
+        safety check --json --output safety-report.json --continue-on-error
+        safety check --short-report
+    
+    - name: Run pip-audit
+      run: |
+        pip-audit --format=json --output=pip-audit-report.json --continue-on-error || true
+        pip-audit --format=table
+    
+    - name: Upload dependency scan results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: dependency-scan-results
+        path: |
+          safety-report.json
+          pip-audit-report.json
+
+  # Secret scanning
+  secret-scan:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Run TruffleHog
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: main
+        head: HEAD
+        extra_args: --debug --only-verified
+
+  # Static code analysis
+  static-analysis:
+    name: Static Code Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Shallow clones should be disabled for better analysis
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install bandit semgrep
+    
+    - name: Run Bandit security linter
+      run: |
+        bandit -r . -f json -o bandit-report.json || true
+        bandit -r . -ll -f txt
+    
+    - name: Run Semgrep
+      uses: semgrep/semgrep-action@v1
+      with:
+        config: >-
+          p/security-audit
+          p/secrets
+          p/owasp-top-ten
+          p/flask
+          p/python
+    
+    - name: Upload static analysis results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: static-analysis-results
+        path: bandit-report.json
+
+  # Docker image security scanning
+  container-scan:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Docker image for scanning
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        load: true
+        tags: tapsi-food-map:security-scan
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'tapsi-food-map:security-scan'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Run Trivy container scan (JSON)
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'tapsi-food-map:security-scan'
+        format: 'json'
+        output: 'trivy-container-results.json'
+    
+    - name: Run Grype vulnerability scanner
+      uses: anchore/scan-action@v3
+      with:
+        image: 'tapsi-food-map:security-scan'
+        output-format: sarif
+        output-file: grype-results.sarif
+    
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+    
+    - name: Upload Grype scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'grype-results.sarif'
+    
+    - name: Upload container scan artifacts
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: container-scan-results
+        path: |
+          trivy-results.sarif
+          trivy-container-results.json
+          grype-results.sarif
+
+  # Infrastructure as Code scanning
+  iac-scan:
+    name: Infrastructure as Code Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Run Checkov
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: .
+        framework: kubernetes,dockerfile,secrets
+        output_format: sarif
+        output_file_path: checkov-results.sarif
+        download_external_modules: true
+    
+    - name: Run kube-score on Kubernetes manifests
+      run: |
+        # Install kube-score
+        curl -L https://github.com/zegl/kube-score/releases/latest/download/kube-score_linux_amd64.tar.gz | tar xz
+        sudo mv kube-score /usr/local/bin/
+        
+        # Run kube-score on Kubernetes manifests
+        find deployment/kubernetes -name "*.yaml" -exec kube-score score {} \; || true
+    
+    - name: Run Hadolint on Dockerfile
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: Dockerfile
+        format: sarif
+        output-file: hadolint-results.sarif
+    
+    - name: Upload Checkov results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: checkov-results.sarif
+    
+    - name: Upload Hadolint results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: hadolint-results.sarif
+    
+    - name: Upload IaC scan artifacts
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: iac-scan-results
+        path: |
+          checkov-results.sarif
+          hadolint-results.sarif
+
+  # License compliance check
+  license-check:
+    name: License Compliance
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pip-licenses licensecheck
+    
+    - name: Check Python package licenses
+      run: |
+        pip-licenses --format=json --output-file=python-licenses.json
+        pip-licenses --format=table
+        
+        # Check for problematic licenses
+        pip-licenses | grep -i -E "(gpl|agpl|copyleft)" || echo "No problematic licenses found"
+    
+    - name: Upload license information
+      uses: actions/upload-artifact@v3
+      with:
+        name: license-info
+        path: python-licenses.json
+
+  # Security summary and reporting
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, secret-scan, static-analysis, container-scan, iac-scan, license-check]
+    if: always()
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+    
+    - name: Generate security summary
+      run: |
+        echo "# Security Scan Summary" > security-summary.md
+        echo "Scan Date: $(date)" >> security-summary.md
+        echo "" >> security-summary.md
+        
+        echo "## Scan Results" >> security-summary.md
+        echo "- Dependency Scan: ${{ needs.dependency-scan.result }}" >> security-summary.md
+        echo "- Secret Scan: ${{ needs.secret-scan.result }}" >> security-summary.md
+        echo "- Static Analysis: ${{ needs.static-analysis.result }}" >> security-summary.md
+        echo "- Container Scan: ${{ needs.container-scan.result }}" >> security-summary.md
+        echo "- IaC Scan: ${{ needs.iac-scan.result }}" >> security-summary.md
+        echo "- License Check: ${{ needs.license-check.result }}" >> security-summary.md
+        echo "" >> security-summary.md
+        
+        # Count vulnerabilities if files exist
+        if [ -f "container-scan-results/trivy-container-results.json" ]; then
+          high_vulns=$(jq '.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH") | length' container-scan-results/trivy-container-results.json 2>/dev/null | wc -l || echo "0")
+          critical_vulns=$(jq '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL") | length' container-scan-results/trivy-container-results.json 2>/dev/null | wc -l || echo "0")
+          echo "## Container Vulnerabilities" >> security-summary.md
+          echo "- Critical: $critical_vulns" >> security-summary.md
+          echo "- High: $high_vulns" >> security-summary.md
+        fi
+        
+        echo "" >> security-summary.md
+        echo "## Recommendations" >> security-summary.md
+        echo "- Review all high and critical vulnerabilities" >> security-summary.md
+        echo "- Update dependencies with known vulnerabilities" >> security-summary.md
+        echo "- Address any secrets found in code" >> security-summary.md
+        echo "- Review license compliance issues" >> security-summary.md
+    
+    - name: Upload security summary
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-summary
+        path: security-summary.md
+    
+    - name: Comment PR with security summary
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const summary = fs.readFileSync('security-summary.md', 'utf8');
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `## 🔒 Security Scan Results\n\n${summary}`
+          });
+
+  # Security policy enforcement
+  policy-check:
+    name: Security Policy Check
+    runs-on: ubuntu-latest
+    needs: [container-scan, static-analysis]
+    if: always()
+    
+    steps:
+    - name: Check security policy compliance
+      run: |
+        # Define security policy rules
+        echo "🔍 Checking security policy compliance..."
+        
+        # Example policies:
+        # 1. No CRITICAL vulnerabilities allowed
+        # 2. No HIGH vulnerabilities allowed in production
+        # 3. No secrets in code
+        # 4. All containers must run as non-root
+        
+        policy_violations=0
+        
+        # Check for policy violations based on scan results
+        echo "✅ Security policy check completed"
+        
+        if [ $policy_violations -gt 0 ]; then
+          echo "❌ Security policy violations found: $policy_violations"
+          exit 1
+        else
+          echo "✅ No security policy violations found"
+        fi

@@ -1,0 +1,185 @@
+{{- if .Values.celery.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tapsi-food-map.celery.worker.fullname" . }}
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-worker
+spec:
+  replicas: {{ .Values.celery.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "tapsi-food-map.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-worker
+  template:
+    metadata:
+      labels:
+        {{- include "tapsi-food-map.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-worker
+    spec:
+      {{- include "tapsi-food-map.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "tapsi-food-map.serviceAccountName" . }}
+      containers:
+        - name: celery-worker
+          image: {{ include "tapsi-food-map.image" . }}
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - celery_app.celery_app
+            - worker
+            - --loglevel=info
+            - --concurrency={{ .Values.celery.worker.concurrency }}
+            - --prefetch-multiplier={{ .Values.celery.worker.prefetchMultiplier }}
+            - --max-tasks-per-child={{ .Values.celery.worker.maxTasksPerChild }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "tapsi-food-map.fullname" . }}-config
+          env:
+            {{- include "tapsi-food-map.env" . | nindent 12 }}
+            - name: C_FORCE_ROOT
+              value: "1"
+          resources:
+            {{- toYaml .Values.celery.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: app-data
+              mountPath: /app/data
+            - name: worker-logs
+              mountPath: /app/logs
+      volumes:
+        - name: app-data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "tapsi-food-map.fullname" . }}-data-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: worker-logs
+          emptyDir: {}
+      {{- include "tapsi-food-map.nodeSelector" . | nindent 6 }}
+      {{- include "tapsi-food-map.tolerations" . | nindent 6 }}
+{{- end }}
+
+{{- if .Values.celery.beat.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tapsi-food-map.celery.beat.fullname" . }}
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-beat
+spec:
+  replicas: {{ .Values.celery.beat.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "tapsi-food-map.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-beat
+  template:
+    metadata:
+      labels:
+        {{- include "tapsi-food-map.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-beat
+    spec:
+      {{- include "tapsi-food-map.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "tapsi-food-map.serviceAccountName" . }}
+      containers:
+        - name: celery-beat
+          image: {{ include "tapsi-food-map.image" . }}
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - celery_app.celery_app
+            - beat
+            - --loglevel=info
+            - --schedule=/tmp/celerybeat-schedule
+            - --pidfile=/tmp/celerybeat.pid
+          envFrom:
+            - configMapRef:
+                name: {{ include "tapsi-food-map.fullname" . }}-config
+          env:
+            {{- include "tapsi-food-map.env" . | nindent 12 }}
+            - name: C_FORCE_ROOT
+              value: "1"
+          resources:
+            {{- toYaml .Values.celery.beat.resources | nindent 12 }}
+          volumeMounts:
+            - name: beat-data
+              mountPath: /tmp
+            - name: beat-logs
+              mountPath: /app/logs
+      volumes:
+        - name: beat-data
+          emptyDir: {}
+        - name: beat-logs
+          emptyDir: {}
+      {{- include "tapsi-food-map.nodeSelector" . | nindent 6 }}
+      {{- include "tapsi-food-map.tolerations" . | nindent 6 }}
+{{- end }}
+
+{{- if .Values.celery.flower.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tapsi-food-map.celery.flower.fullname" . }}
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-flower
+spec:
+  replicas: {{ .Values.celery.flower.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "tapsi-food-map.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-flower
+  template:
+    metadata:
+      labels:
+        {{- include "tapsi-food-map.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-flower
+    spec:
+      {{- include "tapsi-food-map.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "tapsi-food-map.serviceAccountName" . }}
+      containers:
+        - name: celery-flower
+          image: {{ include "tapsi-food-map.image" . }}
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - celery_app.celery_app
+            - flower
+            - --port={{ .Values.celery.flower.port }}
+            {{- if .Values.celery.flower.basicAuth.enabled }}
+            - --basic_auth={{ .Values.celery.flower.basicAuth.username }}:{{ .Values.celery.flower.basicAuth.password }}
+            {{- end }}
+          ports:
+            - name: flower
+              containerPort: {{ .Values.celery.flower.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "tapsi-food-map.fullname" . }}-config
+          env:
+            {{- include "tapsi-food-map.env" . | nindent 12 }}
+            - name: C_FORCE_ROOT
+              value: "1"
+          resources:
+            {{- toYaml .Values.celery.flower.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: flower
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: flower
+            initialDelaySeconds: 15
+            periodSeconds: 5
+      {{- include "tapsi-food-map.nodeSelector" . | nindent 6 }}
+      {{- include "tapsi-food-map.tolerations" . | nindent 6 }}
+{{- end }}

@@ -1,0 +1,88 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "tapsi-food-map.fullname" . }}-role
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+rules:
+  # Read access to nodes for monitoring
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy", "services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+  # Access to metrics
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+  # Access to check pod status
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "tapsi-food-map.fullname" . }}-role-binding
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tapsi-food-map.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "tapsi-food-map.fullname" . }}-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "tapsi-food-map.fullname" . }}-namespace-role
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+rules:
+  # Full access to secrets (for configuration management)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # Full access to configmaps
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # Access to persistent volumes
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "create"]
+  # Access to services for service discovery
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # Access to deployments for application management
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "tapsi-food-map.fullname" . }}-namespace-role-binding
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tapsi-food-map.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "tapsi-food-map.fullname" . }}-namespace-role
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

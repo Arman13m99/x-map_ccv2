@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tapsi-food-map.fullname" . }}-service
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: application
+  {{- with .Values.app.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+    prometheus.io/scrape: "true"
+    prometheus.io/port: {{ .Values.app.service.port | quote }}
+    prometheus.io/path: "/health/metrics"
+  {{- end }}
+spec:
+  type: {{ .Values.app.service.type }}
+  ports:
+    - port: {{ .Values.app.service.port }}
+      targetPort: {{ .Values.app.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "tapsi-food-map.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: application
+
+{{- if .Values.nginx.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tapsi-food-map.nginx.fullname" . }}-service
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nginx
+  {{- with .Values.nginx.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "80"
+    prometheus.io/path: "/nginx_status"
+  {{- end }}
+spec:
+  type: {{ .Values.nginx.service.type }}
+  ports:
+    - port: {{ .Values.nginx.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    {{- if .Values.nginx.service.httpsPort }}
+    - port: {{ .Values.nginx.service.httpsPort }}
+      targetPort: https
+      protocol: TCP
+      name: https
+    {{- end }}
+  selector:
+    {{- include "tapsi-food-map.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nginx
+{{- end }}
+
+{{- if .Values.celery.flower.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tapsi-food-map.celery.flower.fullname" . }}-service
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-flower
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.celery.flower.port }}
+      targetPort: flower
+      protocol: TCP
+      name: flower
+  selector:
+    {{- include "tapsi-food-map.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-flower
+{{- end }}

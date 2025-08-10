@@ -1,0 +1,428 @@
+# cd.yml - Continuous Deployment Pipeline for Tapsi Food Map Dashboard
+name: CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+      force_deploy:
+        description: 'Force deployment (skip some checks)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Determine deployment environment and strategy
+  deployment-strategy:
+    name: Deployment Strategy
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.strategy.outputs.environment }}
+      image-tag: ${{ steps.strategy.outputs.image-tag }}
+      deploy-to-staging: ${{ steps.strategy.outputs.deploy-to-staging }}
+      deploy-to-production: ${{ steps.strategy.outputs.deploy-to-production }}
+    
+    steps:
+    - name: Determine deployment strategy
+      id: strategy
+      run: |
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          echo "image-tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          if [[ "${{ github.event.inputs.environment }}" == "staging" ]]; then
+            echo "deploy-to-staging=true" >> $GITHUB_OUTPUT
+            echo "deploy-to-production=false" >> $GITHUB_OUTPUT
+          else
+            echo "deploy-to-staging=false" >> $GITHUB_OUTPUT
+            echo "deploy-to-production=true" >> $GITHUB_OUTPUT
+          fi
+        elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "environment=staging" >> $GITHUB_OUTPUT
+          echo "image-tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "deploy-to-staging=true" >> $GITHUB_OUTPUT
+          echo "deploy-to-production=false" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          echo "environment=production" >> $GITHUB_OUTPUT
+          echo "image-tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          echo "deploy-to-staging=true" >> $GITHUB_OUTPUT
+          echo "deploy-to-production=true" >> $GITHUB_OUTPUT
+        fi
+
+  # Build and push Docker image
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: deployment-strategy
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          VCS_REF=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.revision'] }}
+          VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+    
+    - name: Output image
+      id: image
+      run: echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.deployment-strategy.outputs.image-tag }}" >> $GITHUB_OUTPUT
+
+  # Deploy to staging environment
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [deployment-strategy, build-and-push]
+    if: needs.deployment-strategy.outputs.deploy-to-staging == 'true'
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+    
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: v3.12.0
+    
+    - name: Configure Kubernetes context
+      run: |
+        echo "${{ secrets.STAGING_KUBECONFIG }}" | base64 -d > kubeconfig
+        echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+    
+    - name: Create namespace if not exists
+      run: |
+        kubectl create namespace tapsi-food-map-staging --dry-run=client -o yaml | kubectl apply -f -
+    
+    - name: Deploy with Helm
+      run: |
+        helm upgrade --install tapsi-food-map-staging ./deployment/helm \
+          --namespace tapsi-food-map-staging \
+          --values deployment/helm/values-staging.yaml \
+          --set app.image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
+          --set app.image.tag=${{ needs.deployment-strategy.outputs.image-tag }} \
+          --set secrets.secretKey="${{ secrets.STAGING_SECRET_KEY }}" \
+          --set secrets.dbPassword="${{ secrets.STAGING_DB_PASSWORD }}" \
+          --set secrets.metabaseUsername="${{ secrets.STAGING_METABASE_USERNAME }}" \
+          --set secrets.metabasePassword="${{ secrets.STAGING_METABASE_PASSWORD }}" \
+          --set secrets.grafanaAdminPassword="${{ secrets.STAGING_GRAFANA_PASSWORD }}" \
+          --timeout 10m \
+          --wait
+    
+    - name: Run deployment tests
+      run: |
+        # Wait for all pods to be ready
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=tapsi-food-map-staging -n tapsi-food-map-staging --timeout=300s
+        
+        # Get application URL
+        APP_URL=$(kubectl get ingress tapsi-food-map-staging-ingress -n tapsi-food-map-staging -o jsonpath='{.spec.rules[0].host}')
+        
+        # Test health endpoint
+        curl -f https://$APP_URL/health || exit 1
+        
+        # Test API endpoint
+        curl -f https://$APP_URL/api/map_data || exit 1
+        
+        echo "✅ Staging deployment successful!"
+    
+    - name: Run smoke tests
+      run: |
+        # Install k6 for API testing
+        curl -L https://github.com/grafana/k6/releases/latest/download/k6-v0.45.1-linux-amd64.tar.gz | tar xz
+        sudo mv k6-v0.45.1-linux-amd64/k6 /usr/local/bin/
+        
+        # Create smoke test
+        cat > smoke-test.js << 'EOF'
+        import http from 'k6/http';
+        import { check } from 'k6';
+        
+        export const options = {
+          vus: 5,
+          duration: '30s',
+        };
+        
+        export default function() {
+          const baseUrl = 'https://staging.tapsi-food-map.yourdomain.com';
+          
+          const healthResponse = http.get(`${baseUrl}/health`);
+          check(healthResponse, {
+            'health check status is 200': (r) => r.status === 200,
+          });
+          
+          const apiResponse = http.get(`${baseUrl}/api/map_data`);
+          check(apiResponse, {
+            'API status is 200': (r) => r.status === 200,
+          });
+        }
+        EOF
+        
+        k6 run smoke-test.js
+
+  # Security scan of deployed application
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    if: always() && needs.deploy-staging.result == 'success'
+    
+    steps:
+    - name: OWASP ZAP API Scan
+      uses: zaproxy/action-api-scan@v0.6.0
+      with:
+        target: 'https://staging.tapsi-food-map.yourdomain.com/api/'
+        format: openapi
+        fail_action: false
+    
+    - name: Upload ZAP results
+      uses: actions/upload-artifact@v3
+      with:
+        name: zap-results
+        path: report_json.json
+
+  # Deploy to production environment
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [deployment-strategy, build-and-push, deploy-staging, security-scan]
+    if: |
+      always() && 
+      needs.deployment-strategy.outputs.deploy-to-production == 'true' &&
+      needs.deploy-staging.result == 'success' &&
+      (needs.security-scan.result == 'success' || github.event.inputs.force_deploy == 'true')
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+    
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: v3.12.0
+    
+    - name: Configure Kubernetes context
+      run: |
+        echo "${{ secrets.PRODUCTION_KUBECONFIG }}" | base64 -d > kubeconfig
+        echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+    
+    - name: Create namespace if not exists
+      run: |
+        kubectl create namespace tapsi-food-map --dry-run=client -o yaml | kubectl apply -f -
+    
+    - name: Backup current deployment
+      run: |
+        # Create backup of current Helm release
+        helm get all tapsi-food-map -n tapsi-food-map > backup-$(date +%Y%m%d-%H%M%S).yaml || echo "No previous deployment to backup"
+        
+        # Save current database state (if needed)
+        echo "Database backup would be performed here in real deployment"
+    
+    - name: Deploy with Helm (Blue-Green Strategy)
+      run: |
+        # Deploy to production with zero-downtime strategy
+        helm upgrade --install tapsi-food-map ./deployment/helm \
+          --namespace tapsi-food-map \
+          --values deployment/helm/values-prod.yaml \
+          --set app.image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
+          --set app.image.tag=${{ needs.deployment-strategy.outputs.image-tag }} \
+          --set secrets.secretKey="${{ secrets.PRODUCTION_SECRET_KEY }}" \
+          --set secrets.dbPassword="${{ secrets.PRODUCTION_DB_PASSWORD }}" \
+          --set secrets.metabaseUsername="${{ secrets.PRODUCTION_METABASE_USERNAME }}" \
+          --set secrets.metabasePassword="${{ secrets.PRODUCTION_METABASE_PASSWORD }}" \
+          --set secrets.grafanaAdminPassword="${{ secrets.PRODUCTION_GRAFANA_PASSWORD }}" \
+          --set ingress.hosts[0].host="${{ secrets.PRODUCTION_DOMAIN }}" \
+          --timeout 15m \
+          --wait
+    
+    - name: Verify production deployment
+      run: |
+        # Wait for all pods to be ready
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=tapsi-food-map -n tapsi-food-map --timeout=600s
+        
+        # Get application URL
+        APP_URL="${{ secrets.PRODUCTION_DOMAIN }}"
+        
+        # Health check with retry
+        for i in {1..10}; do
+          if curl -f https://$APP_URL/health; then
+            echo "✅ Production health check passed"
+            break
+          fi
+          echo "Attempt $i failed, retrying in 30s..."
+          sleep 30
+        done
+        
+        # API test
+        curl -f https://$APP_URL/api/map_data || exit 1
+        
+        echo "🎉 Production deployment successful!"
+    
+    - name: Run production health checks
+      run: |
+        # Extended production health checks
+        APP_URL="${{ secrets.PRODUCTION_DOMAIN }}"
+        
+        # Test all critical endpoints
+        endpoints=(
+          "/health"
+          "/health/ready"
+          "/health/live"
+          "/api/map_data"
+          "/api/vendors"
+        )
+        
+        for endpoint in "${endpoints[@]}"; do
+          echo "Testing $endpoint..."
+          response_code=$(curl -s -o /dev/null -w "%{http_code}" https://$APP_URL$endpoint)
+          if [[ $response_code -ne 200 ]]; then
+            echo "❌ Endpoint $endpoint failed with code $response_code"
+            exit 1
+          fi
+        done
+        
+        echo "✅ All production health checks passed"
+    
+    - name: Notify deployment success
+      run: |
+        echo "🚀 Production deployment completed successfully!"
+        echo "Application URL: https://${{ secrets.PRODUCTION_DOMAIN }}"
+        echo "Monitoring: https://grafana.${{ secrets.PRODUCTION_DOMAIN }}"
+
+  # Rollback mechanism
+  rollback:
+    name: Rollback Deployment
+    runs-on: ubuntu-latest
+    if: failure() && github.event.inputs.force_deploy != 'true'
+    environment: production
+    
+    steps:
+    - name: Configure kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+    
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: v3.12.0
+    
+    - name: Configure Kubernetes context
+      run: |
+        echo "${{ secrets.PRODUCTION_KUBECONFIG }}" | base64 -d > kubeconfig
+        echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+    
+    - name: Rollback to previous version
+      run: |
+        echo "🔄 Rolling back production deployment..."
+        helm rollback tapsi-food-map -n tapsi-food-map
+        
+        # Wait for rollback to complete
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=tapsi-food-map -n tapsi-food-map --timeout=600s
+        
+        echo "✅ Rollback completed successfully"
+
+  # Post-deployment notifications
+  notify:
+    name: Notify Deployment Status
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, deploy-production]
+    if: always()
+    
+    steps:
+    - name: Notify Slack
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        text: |
+          Deployment Status: ${{ job.status }}
+          Environment: ${{ needs.deployment-strategy.outputs.environment }}
+          Image: ${{ needs.build-and-push.outputs.image }}
+          Commit: ${{ github.sha }}
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    
+    - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/v') && needs.deploy-production.result == 'success'
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        body: |
+          ## What's Changed
+          - Production deployment successful
+          - Docker image: ${{ needs.build-and-push.outputs.image }}
+          - Deployment time: ${{ github.event.head_commit.timestamp }}
+          
+          ## Deployment Details
+          - Staging: ✅ Successful
+          - Production: ✅ Successful
+          - Security Scan: ✅ Passed
+          
+          ## Monitoring
+          - [Application Dashboard](https://grafana.${{ secrets.PRODUCTION_DOMAIN }})
+          - [Application URL](https://${{ secrets.PRODUCTION_DOMAIN }})
+        draft: false
+        prerelease: false

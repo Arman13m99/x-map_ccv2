@@ -1,0 +1,234 @@
+# values-staging.yaml - Staging environment values for Tapsi Food Map Dashboard
+# Reduced resource allocation for cost optimization in staging
+
+global:
+  storageClass: "standard"
+
+app:
+  image:
+    registry: your-registry.com
+    repository: tapsi/tapsi-food-map
+    tag: "staging-latest"
+    pullPolicy: Always
+  
+  replicaCount: 2  # Reduced for staging
+  
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5  # Lower max for staging
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+nginx:
+  replicaCount: 1  # Single instance for staging
+  
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+celery:
+  worker:
+    replicaCount: 2  # Fewer workers
+    concurrency: 4
+    
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+
+postgresql:
+  enabled: true
+  
+  auth:
+    postgresPassword: "staging_db_password"
+    password: "staging_db_password"
+  
+  primary:
+    persistence:
+      enabled: true
+      storageClass: "standard"
+      size: 20Gi  # Smaller storage for staging
+    
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    configuration: |
+      shared_buffers = 256MB
+      effective_cache_size = 1GB
+      work_mem = 64MB
+      maintenance_work_mem = 256MB
+      max_connections = 100
+
+redis:
+  enabled: true
+  
+  master:
+    persistence:
+      enabled: true
+      storageClass: "standard"
+      size: 5Gi  # Smaller cache
+    
+    resources:
+      limits:
+        cpu: 250m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+  
+  commonConfiguration: |-
+    bind 0.0.0.0
+    port 6379
+    maxmemory 400mb
+    maxmemory-policy allkeys-lru
+    save 900 1
+    save 300 10
+    save 60 10000
+
+monitoring:
+  prometheus:
+    server:
+      retention: "7d"  # Shorter retention for staging
+      persistentVolume:
+        enabled: true
+        size: 20Gi
+        storageClass: "standard"
+      
+      resources:
+        limits:
+          cpu: 500m
+          memory: 1Gi
+        requests:
+          cpu: 250m
+          memory: 512Mi
+    
+    alertmanager:
+      enabled: false  # Disable alerts in staging
+  
+  grafana:
+    persistence:
+      enabled: true
+      size: 5Gi
+      storageClass: "standard"
+    
+    adminPassword: staging_grafana_password
+    
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/rate-limit: "50"  # Lower rate limit for staging
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-staging"
+  
+  hosts:
+    - host: staging.tapsi-food-map.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+  
+  tls:
+    - secretName: tapsi-app-tls-staging
+      hosts:
+        - staging.tapsi-food-map.yourdomain.com
+
+monitoringIngress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: monitoring-basic-auth
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    cert-manager.io/cluster-issuer: "letsencrypt-staging"
+  
+  hosts:
+    grafana:
+      host: grafana-staging.tapsi-food-map.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+    prometheus:
+      host: prometheus-staging.tapsi-food-map.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+    flower:
+      host: flower-staging.tapsi-food-map.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+persistence:
+  enabled: true
+  storageClass: "standard"
+  size: 5Gi  # Smaller storage for staging
+
+# Staging configuration
+config:
+  metabase:
+    url: "https://staging-metabase.ofood.cloud"
+    team: "growth"
+    orderDataQuestionId: "5822"
+    vendorDataQuestionId: "5045"
+  
+  security:
+    corsOrigins: "https://staging.tapsi-food-map.yourdomain.com"
+    trustedProxies: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+# Staging secrets (less secure for testing)
+secrets:
+  secretKey: "staging-secret-key-not-for-production"
+  dbPassword: "staging_db_password"
+  metabaseUsername: "staging_metabase_user"
+  metabasePassword: "staging_metabase_password"
+  redisPassword: "staging_redis_password"
+  grafanaAdminPassword: "staging_grafana_password"
+
+# No special node requirements for staging
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Reduced resource quotas for staging
+resourceQuota:
+  enabled: true
+  hard:
+    requests.cpu: "5"
+    requests.memory: 10Gi
+    limits.cpu: "10"
+    limits.memory: 20Gi
+    persistentvolumeclaims: "10"

@@ -1,0 +1,213 @@
+# rbac.yaml - Role-Based Access Control for Tapsi Food Map Dashboard
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tapsi-app-sa
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: tapsi-app-sa
+    app.kubernetes.io/component: serviceaccount
+    app.kubernetes.io/part-of: tapsi-food-map
+
+---
+# ClusterRole for application monitoring and health checks
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tapsi-app-role
+  labels:
+    app.kubernetes.io/name: tapsi-app-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: tapsi-food-map
+rules:
+# Read access to nodes for monitoring
+- apiGroups: [""]
+  resources: ["nodes", "nodes/proxy", "services", "endpoints", "pods"]
+  verbs: ["get", "list", "watch"]
+# Access to metrics
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get"]
+# Access to check pod status
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+
+---
+# ClusterRoleBinding to bind the role to service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tapsi-app-role-binding
+  labels:
+    app.kubernetes.io/name: tapsi-app-role-binding
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: tapsi-food-map
+subjects:
+- kind: ServiceAccount
+  name: tapsi-app-sa
+  namespace: tapsi-food-map
+roleRef:
+  kind: ClusterRole
+  name: tapsi-app-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Role for namespace-specific operations
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tapsi-app-namespace-role
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: tapsi-app-namespace-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: tapsi-food-map
+rules:
+# Full access to secrets (for configuration management)
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+# Full access to configmaps
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+# Access to persistent volumes
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "create"]
+# Access to services for service discovery
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+# Access to deployments for application management
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+
+---
+# RoleBinding for namespace-specific role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tapsi-app-namespace-role-binding
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: tapsi-app-namespace-role-binding
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: tapsi-food-map
+subjects:
+- kind: ServiceAccount
+  name: tapsi-app-sa
+  namespace: tapsi-food-map
+roleRef:
+  kind: Role
+  name: tapsi-app-namespace-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ServiceAccount for Prometheus monitoring
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus-sa
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: prometheus-sa
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: tapsi-food-map
+
+---
+# ClusterRole for Prometheus to scrape metrics
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-role
+  labels:
+    app.kubernetes.io/name: prometheus-role
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: tapsi-food-map
+rules:
+- apiGroups: [""]
+  resources:
+  - nodes
+  - nodes/proxy
+  - services
+  - endpoints
+  - pods
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - extensions
+  resources:
+  - ingresses
+  verbs: ["get", "list", "watch"]
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+
+---
+# ClusterRoleBinding for Prometheus
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-role-binding
+  labels:
+    app.kubernetes.io/name: prometheus-role-binding
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: tapsi-food-map
+subjects:
+- kind: ServiceAccount
+  name: prometheus-sa
+  namespace: tapsi-food-map
+roleRef:
+  kind: ClusterRole
+  name: prometheus-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ServiceAccount for Grafana
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana-sa
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: grafana-sa
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: tapsi-food-map
+
+---
+# Role for Grafana (minimal permissions)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: grafana-role
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: grafana-role
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: tapsi-food-map
+rules:
+# Access to configmaps for dashboard provisioning
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+
+---
+# RoleBinding for Grafana
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: grafana-role-binding
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: grafana-role-binding
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: tapsi-food-map
+subjects:
+- kind: ServiceAccount
+  name: grafana-sa
+  namespace: tapsi-food-map
+roleRef:
+  kind: Role
+  name: grafana-role
+  apiGroup: rbac.authorization.k8s.io

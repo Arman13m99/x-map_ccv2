@@ -1,0 +1,9 @@
+# namespace.yaml - Kubernetes namespace for Tapsi Food Map Dashboard
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tapsi-food-map
+  labels:
+    name: tapsi-food-map
+    app.kubernetes.io/name: tapsi-food-map
+    app.kubernetes.io/part-of: tapsi-food-map-dashboard

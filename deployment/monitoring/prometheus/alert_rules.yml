@@ -1,0 +1,140 @@
+# alert_rules.yml - Prometheus alerting rules for Tapsi Food Map Dashboard
+
+groups:
+  - name: application_alerts
+    rules:
+      # Application is down
+      - alert: ApplicationDown
+        expr: up{job="tapsi-app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tapsi Food Map Dashboard is down"
+          description: "The application has been down for more than 1 minute"
+
+      # High response time
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(flask_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High application response time"
+          description: "95th percentile response time is {{ $value }}s"
+
+      # High error rate
+      - alert: HighErrorRate
+        expr: rate(flask_request_exceptions_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High application error rate"
+          description: "Error rate is {{ $value }} errors per second"
+
+      # Memory usage high
+      - alert: HighMemoryUsage
+        expr: (process_resident_memory_bytes / 1024 / 1024) > 1024
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Application memory usage is {{ $value }}MB"
+
+  - name: database_alerts
+    rules:
+      # PostgreSQL is down
+      - alert: PostgreSQLDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL database is down"
+          description: "PostgreSQL has been down for more than 1 minute"
+
+      # Too many connections
+      - alert: PostgreSQLTooManyConnections
+        expr: pg_stat_activity_count > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL has too many connections"
+          description: "PostgreSQL has {{ $value }} active connections"
+
+      # High database load
+      - alert: PostgreSQLHighLoad
+        expr: rate(pg_stat_database_tup_fetched[5m]) > 10000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High PostgreSQL load"
+          description: "Database is processing {{ $value }} tuples per second"
+
+  - name: redis_alerts
+    rules:
+      # Redis is down
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "Redis has been down for more than 1 minute"
+
+      # High memory usage
+      - alert: RedisHighMemoryUsage
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory usage is high"
+          description: "Redis memory usage is {{ $value | humanizePercentage }}"
+
+      # Low cache hit rate
+      - alert: RedisLowCacheHitRate
+        expr: rate(redis_keyspace_hits_total[5m]) / (rate(redis_keyspace_hits_total[5m]) + rate(redis_keyspace_misses_total[5m])) < 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis cache hit rate is low"
+          description: "Cache hit rate is {{ $value | humanizePercentage }}"
+
+  - name: infrastructure_alerts
+    rules:
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: rate(process_cpu_seconds_total[5m]) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value }}%"
+
+      # Disk space low
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 < 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk space is low"
+          description: "Disk space usage is above 90%"
+
+      # Too many failed requests
+      - alert: TooManyFailedRequests
+        expr: rate(nginx_http_requests_total{status=~"5.."}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Too many failed requests"
+          description: "Error rate is {{ $value }} requests per second"

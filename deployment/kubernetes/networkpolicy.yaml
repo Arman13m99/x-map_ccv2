@@ -1,0 +1,333 @@
+# networkpolicy.yaml - Network policies for security and traffic control
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tapsi-app-network-policy
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: tapsi-app-network-policy
+    app.kubernetes.io/component: security
+    app.kubernetes.io/part-of: tapsi-food-map
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tapsi-app
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic from nginx
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: nginx
+    ports:
+    - protocol: TCP
+      port: 5000
+  # Allow traffic from prometheus for metrics scraping
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - protocol: TCP
+      port: 5000
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow connection to PostgreSQL
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow connection to Redis
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow HTTPS traffic for external APIs (Metabase)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  # Allow HTTP traffic for external APIs
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 80
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nginx-network-policy
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: nginx-network-policy
+    app.kubernetes.io/component: security
+    app.kubernetes.io/part-of: tapsi-food-map
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nginx
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow all ingress traffic (nginx is the entry point)
+  - {}
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow connection to application
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: tapsi-app
+    ports:
+    - protocol: TCP
+      port: 5000
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-network-policy
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: postgres-network-policy
+    app.kubernetes.io/component: security
+    app.kubernetes.io/part-of: tapsi-food-map
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow connection from application
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: tapsi-app
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow connection from celery workers
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: celery-worker
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow connection from celery beat
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: celery-beat
+    ports:
+    - protocol: TCP
+      port: 5432
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-network-policy
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: redis-network-policy
+    app.kubernetes.io/component: security
+    app.kubernetes.io/part-of: tapsi-food-map
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow connection from application
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: tapsi-app
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow connection from celery workers
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: celery-worker
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow connection from celery beat
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: celery-beat
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow connection from celery flower
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: celery-flower
+    ports:
+    - protocol: TCP
+      port: 6379
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: celery-worker-network-policy
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: celery-worker-network-policy
+    app.kubernetes.io/component: security
+    app.kubernetes.io/part-of: tapsi-food-map
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: celery-worker
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # No ingress needed for workers
+  - {}
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow connection to PostgreSQL
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow connection to Redis
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow HTTPS traffic for external APIs (Metabase)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  # Allow HTTP traffic for external APIs
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 80
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-network-policy
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: monitoring-network-policy
+    app.kubernetes.io/component: security
+    app.kubernetes.io/part-of: tapsi-food-map
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: monitoring
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic from nginx for external access
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: nginx
+  # Allow inter-monitoring communication (Grafana to Prometheus)
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: monitoring
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow scraping application metrics
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: tapsi-app
+    ports:
+    - protocol: TCP
+      port: 5000
+  # Allow scraping nginx metrics
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: nginx
+    ports:
+    - protocol: TCP
+      port: 80
+  # Allow inter-monitoring communication
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: monitoring
+
+---
+# Default deny all policy for enhanced security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: tapsi-food-map
+  labels:
+    app.kubernetes.io/name: default-deny-all
+    app.kubernetes.io/component: security
+    app.kubernetes.io/part-of: tapsi-food-map
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress

@@ -1,0 +1,122 @@
+{{- if .Values.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "tapsi-food-map.fullname" . }}-ingress
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ingress
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    {{- range .Values.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            {{- if .pathType }}
+            pathType: {{ .pathType }}
+            {{- end }}
+            backend:
+              service:
+                name: {{ include "tapsi-food-map.nginx.fullname" $ }}-service
+                port:
+                  number: 80
+          {{- end }}
+    {{- end }}
+{{- end }}
+
+{{- if and .Values.monitoringIngress.enabled .Values.monitoring.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "tapsi-food-map.fullname" . }}-monitoring-ingress
+  labels:
+    {{- include "tapsi-food-map.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring-ingress
+  {{- with .Values.monitoringIngress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.monitoringIngress.className }}
+  ingressClassName: {{ .Values.monitoringIngress.className }}
+  {{- end }}
+  {{- if .Values.monitoringIngress.tls }}
+  tls:
+    {{- range .Values.monitoringIngress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- if .Values.monitoringIngress.hosts.grafana }}
+    - host: {{ .Values.monitoringIngress.hosts.grafana.host | quote }}
+      http:
+        paths:
+          {{- range .Values.monitoringIngress.hosts.grafana.paths }}
+          - path: {{ .path }}
+            {{- if .pathType }}
+            pathType: {{ .pathType }}
+            {{- end }}
+            backend:
+              service:
+                name: {{ include "tapsi-food-map.fullname" $ }}-grafana
+                port:
+                  number: 3000
+          {{- end }}
+    {{- end }}
+    {{- if .Values.monitoringIngress.hosts.prometheus }}
+    - host: {{ .Values.monitoringIngress.hosts.prometheus.host | quote }}
+      http:
+        paths:
+          {{- range .Values.monitoringIngress.hosts.prometheus.paths }}
+          - path: {{ .path }}
+            {{- if .pathType }}
+            pathType: {{ .pathType }}
+            {{- end }}
+            backend:
+              service:
+                name: {{ include "tapsi-food-map.fullname" $ }}-prometheus-server
+                port:
+                  number: 80
+          {{- end }}
+    {{- end }}
+    {{- if and .Values.monitoringIngress.hosts.flower .Values.celery.flower.enabled }}
+    - host: {{ .Values.monitoringIngress.hosts.flower.host | quote }}
+      http:
+        paths:
+          {{- range .Values.monitoringIngress.hosts.flower.paths }}
+          - path: {{ .path }}
+            {{- if .pathType }}
+            pathType: {{ .pathType }}
+            {{- end }}
+            backend:
+              service:
+                name: {{ include "tapsi-food-map.celery.flower.fullname" $ }}-service
+                port:
+                  number: {{ $.Values.celery.flower.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

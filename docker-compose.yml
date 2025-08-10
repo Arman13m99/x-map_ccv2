@@ -1,0 +1,366 @@
+# docker-compose.yml - Production-ready Docker Compose configuration
+# Tapsi Food Map Dashboard - Complete Stack
+
+version: '3.8'
+
+services:
+  # Redis - Caching and message broker
+  redis:
+    image: redis:7.2-alpine
+    container_name: tapsi-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - tapsi_network
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+        reservations:
+          memory: 256M
+
+  # PostgreSQL - Primary database
+  postgres:
+    image: postgres:15-alpine
+    container_name: tapsi-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${DB_NAME:-tapsi_food_map}
+      POSTGRES_USER: ${DB_USERNAME:-tapsi_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secure_password}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deployment/postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-tapsi_user} -d ${DB_NAME:-tapsi_food_map}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - tapsi_network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  # Main application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_DATE: ${BUILD_DATE}
+        VCS_REF: ${VCS_REF}
+        VERSION: ${VERSION:-2.0.0}
+    container_name: tapsi-app
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      # Application settings
+      FLASK_ENV: production
+      PORT: 5000
+      WORKERS: 4
+      
+      # Database connection
+      DATABASE_URL: postgresql://${DB_USERNAME:-tapsi_user}:${DB_PASSWORD:-secure_password}@postgres:5432/${DB_NAME:-tapsi_food_map}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USERNAME: ${DB_USERNAME:-tapsi_user}
+      DB_PASSWORD: ${DB_PASSWORD:-secure_password}
+      DB_NAME: ${DB_NAME:-tapsi_food_map}
+      
+      # Redis connection
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      
+      # Metabase configuration
+      METABASE_URL: ${METABASE_URL:-https://metabase.ofood.cloud}
+      METABASE_USERNAME: ${METABASE_USERNAME}
+      METABASE_PASSWORD: ${METABASE_PASSWORD}
+      ORDER_DATA_QUESTION_ID: ${ORDER_DATA_QUESTION_ID:-5822}
+      VENDOR_DATA_QUESTION_ID: ${VENDOR_DATA_QUESTION_ID:-5045}
+      
+      # Security
+      SECRET_KEY: ${SECRET_KEY}
+      
+      # Performance
+      CACHE_TTL: 3600
+      CHUNK_SIZE: 100000
+      WORKER_COUNT: 10
+      
+      # Monitoring
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      
+      # Migration
+      RUN_MIGRATIONS: true
+      
+    volumes:
+      - app_logs:/app/logs
+      - app_data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - tapsi_network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+
+  # Celery worker for background tasks
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_DATE: ${BUILD_DATE}
+        VCS_REF: ${VCS_REF}
+        VERSION: ${VERSION:-2.0.0}
+    container_name: tapsi-celery-worker
+    restart: unless-stopped
+    command: ["celery-worker"]
+    environment:
+      # Database connection
+      DATABASE_URL: postgresql://${DB_USERNAME:-tapsi_user}:${DB_PASSWORD:-secure_password}@postgres:5432/${DB_NAME:-tapsi_food_map}
+      
+      # Redis connection
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      
+      # Metabase configuration
+      METABASE_URL: ${METABASE_URL:-https://metabase.ofood.cloud}
+      METABASE_USERNAME: ${METABASE_USERNAME}
+      METABASE_PASSWORD: ${METABASE_PASSWORD}
+      ORDER_DATA_QUESTION_ID: ${ORDER_DATA_QUESTION_ID:-5822}
+      VENDOR_DATA_QUESTION_ID: ${VENDOR_DATA_QUESTION_ID:-5045}
+      
+      # Celery settings
+      CELERY_WORKER_CONCURRENCY: 4
+      CELERY_WORKER_PREFETCH: 1
+      CELERY_WORKER_MAX_TASKS: 100
+      
+      # Monitoring
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      
+    volumes:
+      - app_logs:/app/logs
+      - app_data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - tapsi_network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.8'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+
+  # Celery beat scheduler
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_DATE: ${BUILD_DATE}
+        VCS_REF: ${VCS_REF}
+        VERSION: ${VERSION:-2.0.0}
+    container_name: tapsi-celery-beat
+    restart: unless-stopped
+    command: ["celery-beat"]
+    environment:
+      # Redis connection
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      
+      # Monitoring
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      
+    volumes:
+      - app_logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - tapsi_network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.2'
+        reservations:
+          memory: 64M
+          cpus: '0.05'
+
+  # Nginx reverse proxy
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: tapsi-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deployment/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deployment/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./deployment/ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - app
+    networks:
+      - tapsi_network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+        reservations:
+          memory: 64M
+          cpus: '0.05'
+
+  # Prometheus monitoring
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: tapsi-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--storage.tsdb.retention.time=30d'
+    volumes:
+      - ./deployment/monitoring/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    networks:
+      - tapsi_network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+
+  # Grafana dashboards
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: tapsi-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: redis-datasource,postgres-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deployment/monitoring/grafana:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - tapsi_network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.05'
+
+  # Redis Exporter for Prometheus
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.55.0
+    container_name: tapsi-redis-exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis:6379
+    depends_on:
+      - redis
+    networks:
+      - tapsi_network
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.1'
+
+  # PostgreSQL Exporter for Prometheus  
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: tapsi-postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: postgresql://${DB_USERNAME:-tapsi_user}:${DB_PASSWORD:-secure_password}@postgres:5432/${DB_NAME:-tapsi_food_map}?sslmode=disable
+    depends_on:
+      - postgres
+    networks:
+      - tapsi_network
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.1'
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  app_logs:
+    driver: local
+  app_data:
+    driver: local
+  nginx_logs:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  tapsi_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

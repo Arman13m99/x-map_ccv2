@@ -1,0 +1,360 @@
+# values-prod.yaml - Production-specific values for Tapsi Food Map Dashboard
+# Override default values for production environment
+
+global:
+  storageClass: "fast-ssd"  # Use high-performance storage class
+
+app:
+  image:
+    registry: your-registry.com
+    repository: tapsi/tapsi-food-map
+    tag: "2.0.0"
+    pullPolicy: Always  # Always pull latest in production
+  
+  replicaCount: 5  # Higher replica count for production
+  
+  resources:
+    limits:
+      cpu: 2000m      # Increased CPU limits
+      memory: 4Gi     # Increased memory limits
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 5    # Higher minimum for production traffic
+    maxReplicas: 20   # Higher maximum for peak loads
+    targetCPUUtilizationPercentage: 60  # Lower threshold for faster scaling
+    targetMemoryUtilizationPercentage: 70
+  
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 3  # Ensure high availability
+
+nginx:
+  replicaCount: 3  # Multiple nginx instances for HA
+  
+  service:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"  # AWS Network Load Balancer
+      service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+  
+  resources:
+    limits:
+      cpu: 500m      # Increased for production traffic
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+celery:
+  worker:
+    replicaCount: 4  # More workers for production workload
+    concurrency: 8   # Higher concurrency
+    
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+
+postgresql:
+  enabled: true
+  
+  auth:
+    postgresPassword: "CHANGE_ME_PRODUCTION_PASSWORD"
+    password: "CHANGE_ME_PRODUCTION_PASSWORD"
+  
+  primary:
+    persistence:
+      enabled: true
+      storageClass: "fast-ssd"
+      size: 200Gi  # Larger storage for production data
+    
+    resources:
+      limits:
+        cpu: 4000m    # High-performance database
+        memory: 8Gi
+      requests:
+        cpu: 2000m
+        memory: 4Gi
+    
+    # Production PostgreSQL configuration
+    configuration: |
+      # Memory
+      shared_buffers = 2GB
+      effective_cache_size = 6GB
+      work_mem = 256MB
+      maintenance_work_mem = 1GB
+      
+      # Checkpoints
+      checkpoint_completion_target = 0.9
+      wal_buffers = 16MB
+      
+      # Query planner
+      random_page_cost = 1.1
+      effective_io_concurrency = 200
+      
+      # Logging
+      log_min_duration_statement = 1000
+      log_checkpoints = on
+      log_connections = on
+      log_disconnections = on
+      log_lock_waits = on
+      
+      # Connection settings
+      max_connections = 200
+
+redis:
+  enabled: true
+  
+  master:
+    persistence:
+      enabled: true
+      storageClass: "fast-ssd"
+      size: 50Gi  # Larger cache storage
+    
+    resources:
+      limits:
+        cpu: 1000m   # More resources for production cache
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  
+  commonConfiguration: |-
+    # Network
+    bind 0.0.0.0
+    port 6379
+    tcp-backlog 2048
+    timeout 300
+    tcp-keepalive 60
+    
+    # Memory management
+    maxmemory 1.5gb
+    maxmemory-policy allkeys-lru
+    
+    # Persistence (more frequent saves for production)
+    save 300 10
+    save 60 1000
+    save 10 10000
+    
+    # Performance optimizations
+    hash-max-ziplist-entries 512
+    hash-max-ziplist-value 64
+    list-max-ziplist-size -2
+    set-max-intset-entries 512
+    zset-max-ziplist-entries 128
+    zset-max-ziplist-value 64
+
+monitoring:
+  prometheus:
+    server:
+      retention: "90d"  # Longer retention for production
+      persistentVolume:
+        enabled: true
+        size: 200Gi    # More storage for metrics
+        storageClass: "fast-ssd"
+      
+      resources:
+        limits:
+          cpu: 2000m   # More resources for production monitoring
+          memory: 4Gi
+        requests:
+          cpu: 1000m
+          memory: 2Gi
+      
+      # Production alert rules
+      config:
+        rule_files:
+          - /etc/config/alerting_rules.yml
+        
+        alerting:
+          alertmanagers:
+          - static_configs:
+            - targets:
+              - alertmanager.monitoring.svc.cluster.local:9093
+    
+    alertmanager:
+      enabled: true
+      persistence:
+        enabled: true
+        size: 10Gi
+        storageClass: "fast-ssd"
+  
+  grafana:
+    persistence:
+      enabled: true
+      size: 20Gi
+      storageClass: "fast-ssd"
+    
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 200m
+        memory: 512Mi
+    
+    # Production Grafana configuration
+    grafana.ini:
+      server:
+        protocol: http
+        http_port: 3000
+        domain: grafana.tapsi-food-map.yourdomain.com
+        root_url: https://grafana.tapsi-food-map.yourdomain.com
+      
+      security:
+        admin_user: admin
+        admin_password: CHANGE_ME_GRAFANA_PASSWORD
+        secret_key: CHANGE_ME_GRAFANA_SECRET_KEY
+      
+      users:
+        allow_sign_up: false
+        auto_assign_org_role: Viewer
+      
+      auth:
+        disable_login_form: false
+      
+      analytics:
+        reporting_enabled: false
+        check_for_updates: false
+      
+      alerting:
+        enabled: true
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/rate-limit: "200"  # Higher rate limit for production
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "8"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  
+  hosts:
+    - host: tapsi-food-map.yourdomain.com  # Replace with actual domain
+      paths:
+        - path: /
+          pathType: Prefix
+    - host: www.tapsi-food-map.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+  
+  tls:
+    - secretName: tapsi-app-tls-prod
+      hosts:
+        - tapsi-food-map.yourdomain.com
+        - www.tapsi-food-map.yourdomain.com
+
+monitoringIngress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: monitoring-basic-auth
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,YOUR_OFFICE_IP/32"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  
+  hosts:
+    grafana:
+      host: grafana.tapsi-food-map.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+    prometheus:
+      host: prometheus.tapsi-food-map.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+    flower:
+      host: flower.tapsi-food-map.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+persistence:
+  enabled: true
+  storageClass: "fast-ssd"
+  accessMode: ReadWriteOnce
+  size: 20Gi  # Larger storage for production data
+
+networkPolicy:
+  enabled: true
+  allowExternal: true
+
+# Production configuration
+config:
+  metabase:
+    url: "https://metabase.ofood.cloud"
+    team: "growth"
+    orderDataQuestionId: "5822"
+    vendorDataQuestionId: "5045"
+  
+  security:
+    corsOrigins: "https://tapsi-food-map.yourdomain.com,https://www.tapsi-food-map.yourdomain.com"
+    trustedProxies: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+# CRITICAL: Override all default passwords and secrets in production
+secrets:
+  secretKey: "CHANGE_ME_SUPER_SECRET_PRODUCTION_KEY_64_CHARS_MINIMUM"
+  dbPassword: "CHANGE_ME_PRODUCTION_DB_PASSWORD"
+  metabaseUsername: "CHANGE_ME_METABASE_USERNAME"
+  metabasePassword: "CHANGE_ME_METABASE_PASSWORD"
+  redisPassword: "CHANGE_ME_REDIS_PASSWORD"
+  grafanaAdminPassword: "CHANGE_ME_GRAFANA_PASSWORD"
+
+# Production node affinity - spread across availability zones
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - tapsi-food-map
+        topologyKey: kubernetes.io/hostname
+    - weight: 50
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - tapsi-food-map
+        topologyKey: topology.kubernetes.io/zone
+
+# Production tolerations for dedicated nodes (if applicable)
+tolerations:
+- key: "dedicated"
+  operator: "Equal"
+  value: "tapsi-food-map"
+  effect: "NoSchedule"
+
+# Node selector for production nodes (if applicable)
+nodeSelector:
+  node-type: "compute-optimized"  # Adjust based on your node labels
+
+# Production resource quotas and limits
+resourceQuota:
+  enabled: true
+  hard:
+    requests.cpu: "20"
+    requests.memory: 40Gi
+    limits.cpu: "40"
+    limits.memory: 80Gi
+    persistentvolumeclaims: "20"

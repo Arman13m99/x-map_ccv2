@@ -1,0 +1,99 @@
+1. Get the application URL by running these commands:
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else if contains "NodePort" .Values.nginx.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "tapsi-food-map.nginx.fullname" . }}-service)
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.nginx.service.type }}
+     NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+           You can watch the status of by running 'kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "tapsi-food-map.nginx.fullname" . }}-service'
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "tapsi-food-map.nginx.fullname" . }}-service --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+  echo http://$SERVICE_IP:{{ .Values.nginx.service.port }}
+{{- else if contains "ClusterIP" .Values.nginx.service.type }}
+  export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "tapsi-food-map.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=nginx" -o jsonpath="{.items[0].metadata.name}")
+  export CONTAINER_PORT=$(kubectl get pod --namespace {{ .Release.Namespace }} $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
+  echo "Visit http://127.0.0.1:8080 to use your application"
+  kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME 8080:$CONTAINER_PORT
+{{- end }}
+
+2. Monitor your application:
+{{- if and .Values.monitoring.enabled .Values.monitoringIngress.enabled }}
+   - Grafana: http{{ if .Values.monitoringIngress.tls }}s{{ end }}://{{ .Values.monitoringIngress.hosts.grafana.host }}
+   - Prometheus: http{{ if .Values.monitoringIngress.tls }}s{{ end }}://{{ .Values.monitoringIngress.hosts.prometheus.host }}
+{{- if .Values.celery.flower.enabled }}
+   - Celery Flower: http{{ if .Values.monitoringIngress.tls }}s{{ end }}://{{ .Values.monitoringIngress.hosts.flower.host }}
+{{- end }}
+{{- else }}
+   Use kubectl port-forward to access monitoring services:
+   - Grafana: kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "tapsi-food-map.fullname" . }}-grafana 3000:3000
+   - Prometheus: kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "tapsi-food-map.fullname" . }}-prometheus-server 9090:80
+{{- if .Values.celery.flower.enabled }}
+   - Celery Flower: kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "tapsi-food-map.celery.flower.fullname" . }}-service 5555:5555
+{{- end }}
+{{- end }}
+
+3. Check application status:
+   kubectl --namespace {{ .Release.Namespace }} get pods -l "app.kubernetes.io/name={{ include "tapsi-food-map.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+
+4. View application logs:
+   kubectl --namespace {{ .Release.Namespace }} logs -f deployment/{{ include "tapsi-food-map.fullname" . }}
+
+5. Scale the application:
+   kubectl --namespace {{ .Release.Namespace }} scale deployment/{{ include "tapsi-food-map.fullname" . }} --replicas=5
+
+6. Update the application:
+   helm upgrade {{ .Release.Name }} ./tapsi-food-map --namespace {{ .Release.Namespace }}
+
+{{- if .Values.postgresql.enabled }}
+
+7. Connect to PostgreSQL:
+   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "tapsi-food-map.postgresql.fullname" . }} 5432:5432 &
+   PGPASSWORD="{{ .Values.secrets.dbPassword }}" psql --host 127.0.0.1 -U {{ .Values.postgresql.auth.username }} -d {{ .Values.postgresql.auth.database }} -p 5432
+{{- end }}
+
+{{- if .Values.redis.enabled }}
+
+8. Connect to Redis:
+   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "tapsi-food-map.redis.fullname" . }} 6379:6379 &
+   redis-cli -h 127.0.0.1 -p 6379
+{{- end }}
+
+===============================================================================
+= IMPORTANT SECURITY NOTES                                                   =
+===============================================================================
+
+{{- if eq .Values.secrets.secretKey "your-super-secret-production-key-change-this" }}
+⚠️  WARNING: Default secret key detected! Please change the secretKey value in production!
+{{- end }}
+
+{{- if eq .Values.secrets.dbPassword "secure_production_password" }}
+⚠️  WARNING: Default database password detected! Please change the dbPassword value in production!
+{{- end }}
+
+{{- if and .Values.monitoring.enabled (eq .Values.secrets.grafanaAdminPassword "secure_grafana_password") }}
+⚠️  WARNING: Default Grafana password detected! Please change the grafanaAdminPassword value in production!
+{{- end }}
+
+{{- if not .Values.ingress.tls }}
+⚠️  WARNING: TLS is not enabled. Consider enabling TLS for production deployments!
+{{- end }}
+
+For production deployments:
+1. Use proper secrets management (Kubernetes secrets, HashiCorp Vault, etc.)
+2. Enable TLS/SSL certificates
+3. Configure proper authentication and authorization
+4. Review and adjust resource limits
+5. Set up proper backup and disaster recovery procedures
+
+===============================================================================
+
+🚀 Tapsi Food Map Dashboard {{ .Chart.AppVersion }} deployed successfully!
+
+For more information about this deployment, visit:
+- Documentation: https://github.com/tapsi/food-map-dashboard/wiki
+- Issues: https://github.com/tapsi/food-map-dashboard/issues
